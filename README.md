@@ -155,4 +155,6 @@ Logs: `%LOCALAPPDATA%\InfoPanel\logs\plugin-host-InfoPanel.HomeAssistant*.log`
 
 ## License
 
-See repository license file when added.
+InfoPanel.HomeAssistant is licensed under **GPL-3.0-or-later**, the same license as [InfoPanel](https://github.com/habibrehmansg/infopanel). See [LICENSE](LICENSE) for the full text.
+
+Copyright (C) 2026 CyanureChan
