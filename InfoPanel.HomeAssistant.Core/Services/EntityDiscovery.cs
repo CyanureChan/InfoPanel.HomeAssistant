@@ -3,29 +3,19 @@ using InfoPanel.HomeAssistant.Core.Models;
 
 namespace InfoPanel.HomeAssistant.Core.Services;
 
+/// <summary>Thin wrapper over <see cref="EntitySelectionEngine"/> for discovery.</summary>
 public static class EntityDiscovery
 {
-    public static (IReadOnlyList<HomeAssistantEntityState> Selected, int MatchedBeforeCap) Filter(
+    /// <summary>
+    /// Filters Home Assistant states using configured include, domain, and exclude rules.
+    /// </summary>
+    /// <param name="states">All entity states from Home Assistant.</param>
+    /// <param name="settings">Filter configuration.</param>
+    /// <param name="registry">Entity/device registry for device and integration rules.</param>
+    /// <returns>Selection result with counts and matched states.</returns>
+    public static EntitySelectionResult Filter(
         IEnumerable<HomeAssistantEntityState> states,
         HomeAssistantSettings settings,
         HomeAssistantRegistrySnapshot registry) =>
-        EntityIncludeParser.Select(states, settings, registry);
-
-    public static IReadOnlyList<HomeAssistantEntityState> FilterByDomains(
-        IEnumerable<HomeAssistantEntityState> states,
-        HomeAssistantSettings settings)
-    {
-        var domains = settings.GetDomainFilters();
-        if (domains.Count == 0)
-        {
-            return [];
-        }
-
-        return states
-            .Where(s => !string.IsNullOrWhiteSpace(s.EntityId))
-            .Where(s => ExposableEntityDomains.IsSupportedEntity(s.EntityId))
-            .Where(s => domains.Any(d => s.EntityId.StartsWith($"{d}.", StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(s => s.EntityId, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
+        EntitySelectionEngine.Select(states, settings, registry);
 }

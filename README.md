@@ -1,16 +1,27 @@
 # InfoPanel.HomeAssistant
 
-Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.3.1** lets you pick specific entities and groups them by device in the Plugins tree.
+Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.5.0** adds unlimited `*` selection, absolute exclusions, plugin Reload fixes (InfoPanel 1.4+), XML documentation, and one-type-per-file structure.
 
 ## Features
 
 - Connect via Long-Lived Access Token (REST + WebSocket registry)
-- **Entity Include** rules - pick exact entities, devices, integrations, or domains
-- **Integration.Device containers** - e.g. `MQTT.Front Door` with entities inside
-- Fallback domain filter when Entity Include is empty
-- Cap entity count (default **20**, up to 200)
-- `binary_sensor.*` → text; other numeric domains → sensors
+- **Entity Include** + **Entity Domains** combined (union)
+- **Entity Exclude** — absolute; always overrides includes at every tier
+- **Tiered cap**: entity/device/integration rules never capped; domain pool capped unless `*` or Max Entities = 0
+- Comma-separated rules (InfoPanel UI friendly) with optional quoting
+- **Integration.Device containers** — e.g. `Bambu Lab.A1MINI`, `Backup.Backup`
 - Poll every 15 seconds; connection status in **System** container
+
+## Home Assistant concepts
+
+| Term | In Home Assistant | In this plugin |
+|------|-------------------|----------------|
+| **Domain** | Entity type prefix (`sensor`, `light`, `input_boolean`) | `domain.sensor` rule or Entity Domains list |
+| **Entity** | Full id (`sensor.temperature`, `light.room`) | `entity.sensor.temperature` or shorthand `light.room` |
+| **Integration** | Platform that created the entity (`mqtt`, `backup`, `bambu_lab`) | `integration.backup` rule; also the first part of container names |
+| **Device** | Physical or logical device grouping entities | `device."Front Door"` rule; container name is `{Integration}.{DeviceName}` |
+
+Container names come from the HA device registry when available. Example: the backup integration’s device appears as **Backup.Backup** — exclude it with `integration.backup`.
 
 ## Quick Start
 
@@ -25,17 +36,13 @@ Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPa
 dotnet build InfoPanel.HomeAssistant/InfoPanel.HomeAssistant/InfoPanel.HomeAssistant.csproj -c Release
 ```
 
-Credentials (Base URL and Access Token) are configured in the InfoPanel Plugins UI only - nothing is stored in this repository.
-
-### Install to InfoPanel
-
-After building Release output, copy the folder to:
+Copy Release output to:
 
 ```
 %ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\
 ```
 
-Restart InfoPanel, then configure the plugin under **Plugins → Home Assistant**.
+Restart InfoPanel, then configure under **Plugins → Home Assistant**.
 
 ### 3. Configure (Plugins UI)
 
@@ -43,67 +50,87 @@ Restart InfoPanel, then configure the plugin under **Plugins → Home Assistant*
 |---------|---------|
 | Base URL | `https://homeassistant.example.com` |
 | Access Token | Your long-lived token |
-| Entity Include | See rules below |
-| Entity Domains | `sensor,climate,binary_sensor` (fallback when Include is empty) |
-| Max Entities | `20` |
+| Entity Include | `*` or `device."My Printer", integration.bambu_lab` |
+| Entity Domains | `sensor,climate,binary_sensor` or `*` |
+| Entity Exclude | `light.room, domain.input_boolean, integration.backup` |
+| Max Entities | `50` (pool cap only; use `0` or `*` for unlimited) |
 
-Click **Reload** after changing Entity Include or filters.
+Click **Reload** after changing filters — the sensor tree now refreshes without restarting InfoPanel (InfoPanel 1.4+).
 
-## Entity Include rules
+## Selection model
 
-One rule per line in the **Entity Include** field:
+```text
+Final set = (Include explicit + Include domains + EntityDomains) − Exclude
+```
 
-| Rule | Meaning |
-|------|---------|
-| `*` | All **supported** entity types (see below), still capped by Max Entities |
-| `entity.binary_sensor.frontdoor_contact` | Exact entity |
-| `binary_sensor.frontdoor_contact` | Shorthand exact entity |
-| `domain.sensor` | All entities in a domain |
-| `integration.bambu_lab` | All entities from the Bambu Lab integration |
-| `integration.mqtt` | All entities from an integration/platform |
-| `device.My Printer` | All entities on a device (by HA device name) |
-| `device.<device_id>` | All entities on a device (by HA UUID) |
+**Exclusions are absolute.** If you include all lights (`domain.light` or `*`) and exclude `light.room`, that entity is never listed — even when matched by an explicit device or integration rule.
 
-Leave **Entity Include** empty to use **Entity Domains** + **Max Entities**.
+| Tier | Rules | Cap |
+|------|-------|-----|
+| **Explicit** | `entity.*`, `device.*`, `integration.*` | Never capped |
+| **Domain pool** | `EntityDomains`, `domain.*`, `*` in Include | Capped at **Max Entities** unless `*` or Max Entities = **0** |
+
+Example: `EntityDomains=sensor` + `device."My Printer"` + `MaxEntities=50` → all printer entities + up to 50 sensors.
+
+Example: `EntityInclude=*` + `EntityExclude=domain.input_boolean, integration.backup` → all supported entities except Input Booleans and the Backup integration.
+
+Connection status example: `OK (73 entities: 23 explicit + 50 from domains, 5 devices)`
+
+## Rule syntax
+
+Rules are **comma-separated** (works in InfoPanel's single-line config field). Newlines also work when editing the JSON config file directly.
+
+| Rule | Tier | Meaning |
+|------|------|---------|
+| `entity.sensor.temperature` | Explicit | Exact entity |
+| `light.room` | Explicit | Shorthand for exact entity id |
+| `device.My Printer` | Explicit | All entities on device (spaces OK) |
+| `device."My Printer"` | Explicit | Quoted device name (use if name contains commas) |
+| `device.<uuid>` | Explicit | Device by HA registry id |
+| `integration.bambu_lab` | Explicit | All entities from integration |
+| `domain.sensor` | Pool | All entities in domain |
+| `*` | Pool | All supported types (uncapped) |
+
+**Entity Exclude** uses the same syntax.
+
+### Common exclusion examples
+
+```text
+domain.input_boolean
+```
+
+Hides all Input Boolean entities.
+
+```text
+integration.backup
+```
+
+Hides the **Backup.Backup** container and its entities.
+
+```text
+light.room
+```
+
+When including `domain.light` or `*`, removes only `light.room` while keeping other lights.
 
 ### Supported entity types
 
-Only domains that map to InfoPanel sensors/text are exposed. These are included when you use `*` or `domain.*`:
+Included by `*` and domain rules:
 
-`sensor`, `binary_sensor`, `climate`, `number`, `input_number`, `switch`, `input_boolean`, `cover`, `lock`
+`sensor`, `binary_sensor`, `climate`, `number`, `input_number`, `switch`, `input_boolean`, `cover`, `lock`, `light`
 
-**Not exposed:** `automation`, `script`, `button`, `input_text`, `scene`, `group`, `person`, `update`, etc.
-
-### Entity Domains vs Entity Include
-
-| Field | When it applies |
-|-------|-----------------|
-| **Entity Include** | When non-empty - **Entity Domains is ignored** |
-| **Entity Domains** | Fallback when Entity Include is empty |
-| `*` in either field | All **supported** types above (not every HA entity) |
-
-**Max Entities** sorts matches A–Z by entity id and takes the first N. With `*` and Max Entities = 20, you only get the first 20 supported entities alphabetically - raise Max Entities or use specific include rules (recommended).
-
-Example for a Bambu printer bed temperature sensor:
-
-```text
-entity.sensor.my_printer_bed_temperature
-integration.bambu_lab
-```
+**Not exposed:** `automation`, `script`, `button`, `input_text`, `scene`, `group`, `update`, etc.
 
 ## Plugins tree layout
-
-InfoPanel supports three levels: Plugin → Container → Entry.
 
 ```
 Home Assistant
 ├── System
 │   └── Connection Status
-├── MQTT.Front Door
-│   ├── binary_sensor.contact
-│   └── sensor.battery
-└── ZHA.Kitchen Thermostat
-    └── sensor.temperature
+├── Bambu Lab.A1MINI
+│   └── sensor.bed_temperature
+└── MQTT.Front Door
+    └── binary_sensor.contact
 ```
 
 ## Binding paths
@@ -112,49 +139,43 @@ Plugin ID: `home-assistant-plugin`
 
 | Entry | Example path |
 |-------|--------------|
-| Entity | `/home-assistant-plugin/mqtt-front-door/sensor-battery` |
+| Entity | `/home-assistant-plugin/bambu-lab-a1mini/sensor-bed-temperature` |
 | Status | `/home-assistant-plugin/system/connection-status` |
-
-Container IDs are URL-safe slugs derived from `Integration.Device` names.
 
 ## Development
 
 Requires .NET 8 SDK and a local clone of the InfoPanel repository.
 
-### Solution layout
-
 ```
-InfoPanel.HomeAssistant.Core/   API, registry, selection, grouping
-InfoPanel.HomeAssistant/         Plugin (references Core + InfoPanel.Plugins)
+InfoPanel.HomeAssistant.Core/
+  Configuration/     Settings and supported domains
+  Mapping/           Grouping, slugs, state parsing
+  Models/            API and discovery DTOs
+  Rules/             Rule parsing (one type per file)
+  Services/          API, registry, selection
+InfoPanel.HomeAssistant/
+  Plugin/            IPlugin entry point and engine
+  Plugin/Layout/     Discovery layout types
 ```
 
-### Deploy locally
+Public APIs include XML documentation summaries (`GenerateDocumentationFile` enabled on Core).
 
-Build Release, then copy `InfoPanel.HomeAssistant/bin/Release/net8.0/InfoPanel.HomeAssistant-v{VERSION}/InfoPanel.HomeAssistant/` to `%ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\`.
-
-Or import a flat ZIP named `InfoPanel.HomeAssistant.zip` via **Plugins → Import Plugin Archive**.
-
-### Plugin Simulator
-
-```bash
-dotnet run --project infopanel/InfoPanel.Plugins.Simulator/InfoPanel.Plugins.Simulator.csproj
-```
+Build Release and copy to `%ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\`, or import `InfoPanel.HomeAssistant.zip`.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---------|-------|
-| Plugin not in list | Folder/DLL naming; restart after manual copy |
-| No entities after config | Click **Reload** in Plugins UI |
-| `integration.*` / `device.*` rules match nothing | WebSocket registry must be reachable; check firewall |
-| Registry unavailable message | Grouping falls back to domain-based heuristics; WS may be blocked |
-| `socket ... forbidden` | Plugin falls back to `curl.exe` for REST |
-| Import ZIP fails | Name must be `InfoPanel.HomeAssistant.zip`; flat layout |
+| Device entities missing | Use `device.*` or `integration.*` (explicit tier); domain cap does not truncate them |
+| Too many domain entities | Lower Max Entities, add Entity Exclude, or use targeted domains instead of `*` |
+| Excluded entity still visible | Click **Reload**; exclusion applies at discovery time |
+| `device.*` matches nothing | WebSocket registry required; try device UUID |
+| Reload does not update tree | Update InfoPanel to a build that includes the PluginSensors sync fix |
 
 Logs: `%LOCALAPPDATA%\InfoPanel\logs\plugin-host-InfoPanel.HomeAssistant*.log`
 
 ## License
 
-InfoPanel.HomeAssistant is licensed under **GPL-3.0-or-later**, the same license as [InfoPanel](https://github.com/habibrehmansg/infopanel). See [LICENSE](LICENSE) for the full text.
+InfoPanel.HomeAssistant is licensed under **GPL-3.0-or-later**. See [LICENSE](LICENSE).
 
 Copyright (C) 2026 CyanureChan

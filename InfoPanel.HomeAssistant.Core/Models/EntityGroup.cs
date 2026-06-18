@@ -1,18 +1,14 @@
 namespace InfoPanel.HomeAssistant.Core.Models;
 
+/// <summary>A group of Home Assistant entities displayed under one InfoPanel container.</summary>
 public sealed class EntityGroup
 {
+    /// <summary>URL-safe container id used in binding paths.</summary>
     public required string ContainerId { get; init; }
-    public required string ContainerName { get; init; }
-    public required IReadOnlyList<HomeAssistantEntityState> States { get; init; }
-}
 
-public sealed class DiscoveryResult
-{
-    public required IReadOnlyList<EntityGroup> Groups { get; init; }
-    public required IReadOnlyList<HomeAssistantEntityState> SelectedStates { get; init; }
-    public int MatchedBeforeCap { get; init; }
-    public int SupportedEntityCount { get; init; }
-    public bool RegistryAvailable { get; init; }
-    public string? RegistryWarning { get; init; }
+    /// <summary>Human-readable container label (e.g. Bambu Lab.A1MINI).</summary>
+    public required string ContainerName { get; init; }
+
+    /// <summary>Entity states belonging to this container.</summary>
+    public required IReadOnlyList<HomeAssistantEntityState> States { get; init; }
 }

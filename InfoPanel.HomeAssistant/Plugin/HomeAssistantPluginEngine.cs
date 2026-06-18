@@ -1,98 +1,28 @@
-using InfoPanel.HomeAssistant.Core.Configuration;
-using InfoPanel.HomeAssistant.Core.Mapping;
 using InfoPanel.HomeAssistant.Core.Models;
 using InfoPanel.HomeAssistant.Core.Services;
+using InfoPanel.HomeAssistant.Plugin.Layout;
 using InfoPanel.Plugins;
 
 namespace InfoPanel.HomeAssistant.Plugin;
 
-internal sealed class EntityEntry
-{
-    public required string EntityId { get; init; }
-    public required IPluginData Data { get; init; }
-    public PluginSensor? Sensor { get; init; }
-    public PluginText? Text { get; init; }
-
-    public static EntityEntry Create(HomeAssistantEntityState state)
-    {
-        string entryId = EntityIdHelper.ToEntryId(state.EntityId);
-        string displayName = state.DisplayName;
-
-        if (ExposableEntityDomains.IsTextDomain(state.EntityId))
-        {
-            var text = new PluginText(entryId, displayName, "-");
-            return new EntityEntry
-            {
-                EntityId = state.EntityId,
-                Data = text,
-                Text = text,
-            };
-        }
-
-        string? unit = state.Attributes?.UnitOfMeasurement;
-        var sensor = new PluginSensor(entryId, displayName, 0, unit);
-        return new EntityEntry
-        {
-            EntityId = state.EntityId,
-            Data = sensor,
-            Sensor = sensor,
-        };
-    }
-
-    public void ApplyState(HomeAssistantEntityState state)
-    {
-        if (EntityStateMapper.IsUnavailable(state.State))
-        {
-            if (Text != null)
-            {
-                Text.Value = state.State;
-            }
-
-            return;
-        }
-
-        if (Sensor != null)
-        {
-            if (EntityStateMapper.TryParseNumeric(state.State, out float value))
-            {
-                Sensor.Value = value;
-            }
-
-            return;
-        }
-
-        if (Text != null)
-        {
-            Text.Value = state.State;
-        }
-    }
-}
-
-internal sealed class DiscoveredPluginLayout
-{
-    public required IReadOnlyList<EntityGroupLayout> Groups { get; init; }
-    public string? RegistryWarning { get; init; }
-    public int MatchedBeforeCap { get; init; }
-    public int SupportedEntityCount { get; init; }
-
-    public IReadOnlyList<EntityEntry> AllEntries =>
-        Groups.SelectMany(g => g.Entries).ToList();
-}
-
-internal sealed class EntityGroupLayout
-{
-    public required string ContainerId { get; init; }
-    public required string ContainerName { get; init; }
-    public required IReadOnlyList<EntityEntry> Entries { get; init; }
-}
-
+/// <summary>Builds plugin containers from Home Assistant discovery results.</summary>
 internal static class HomeAssistantPluginEngine
 {
+    /// <summary>Container id for connection status and other system entries.</summary>
     public const string SystemContainerId = "system";
 
-    public static void ApplySettings(HomeAssistantRuntime runtime, HomeAssistantSettings settings) =>
+    /// <summary>Applies connection and filter settings to the runtime.</summary>
+    /// <param name="runtime">Shared Home Assistant runtime.</param>
+    /// <param name="settings">Configuration to apply.</param>
+    public static void ApplySettings(HomeAssistantRuntime runtime, Core.Configuration.HomeAssistantSettings settings) =>
         runtime.ApplySettings(settings);
 
+    /// <summary>
+    /// Discovers entities and maps them to plugin layout groups.
+    /// </summary>
+    /// <param name="runtime">Configured runtime with API access.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Layout with grouped entity entries and discovery metadata.</returns>
     public static async Task<DiscoveredPluginLayout> DiscoverLayoutAsync(
         HomeAssistantRuntime runtime,
         CancellationToken cancellationToken)
@@ -111,11 +41,19 @@ internal static class HomeAssistantPluginEngine
         {
             Groups = groups,
             RegistryWarning = discovery.RegistryWarning,
-            MatchedBeforeCap = discovery.MatchedBeforeCap,
+            ExplicitCount = discovery.ExplicitCount,
+            PoolCount = discovery.PoolCount,
+            PoolMatchedBeforeCap = discovery.PoolMatchedBeforeCap,
             SupportedEntityCount = discovery.SupportedEntityCount,
         };
     }
 
+    /// <summary>
+    /// Registers discovered groups and the system container with the plugin host.
+    /// </summary>
+    /// <param name="containers">Host container list from <see cref="BasePlugin.Load"/>.</param>
+    /// <param name="layout">Discovered entity layout.</param>
+    /// <param name="connectionStatus">Connection status text entry.</param>
     public static void RegisterLayout(
         List<IPluginContainer> containers,
         DiscoveredPluginLayout layout,
@@ -133,6 +71,9 @@ internal static class HomeAssistantPluginEngine
         }
     }
 
+    /// <summary>Adds entity entries to a plugin container.</summary>
+    /// <param name="container">Target container.</param>
+    /// <param name="entries">Entity entries to register.</param>
     public static void RegisterEntries(IPluginContainer container, IEnumerable<EntityEntry> entries)
     {
         foreach (var entry in entries)
@@ -141,6 +82,9 @@ internal static class HomeAssistantPluginEngine
         }
     }
 
+    /// <summary>Updates all entity entries from fresh Home Assistant states.</summary>
+    /// <param name="entries">Entries to update.</param>
+    /// <param name="states">Current entity states keyed by entity id.</param>
     public static void UpdateEntries(IEnumerable<EntityEntry> entries, IEnumerable<HomeAssistantEntityState> states)
     {
         var byId = states.ToDictionary(s => s.EntityId, StringComparer.OrdinalIgnoreCase);

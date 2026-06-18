@@ -1,10 +1,12 @@
 ﻿using InfoPanel.HomeAssistant.Core.Configuration;
 using InfoPanel.HomeAssistant.Core.Services;
 using InfoPanel.HomeAssistant.Plugin;
+using InfoPanel.HomeAssistant.Plugin.Layout;
 using InfoPanel.Plugins;
 
 namespace InfoPanel.HomeAssistant.Plugin;
 
+/// <summary>InfoPanel plugin entry point for Home Assistant integration.</summary>
 public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
 {
     private readonly HomeAssistantRuntime _runtime = new();
@@ -18,13 +20,14 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     private string _accessToken = string.Empty;
     private string _entityDomains = HomeAssistantSettings.DefaultEntityDomains;
     private string _entityInclude = string.Empty;
+    private string _entityExclude = string.Empty;
     private int _maxEntities = HomeAssistantSettings.DefaultMaxEntities;
 
     public HomeAssistantPlugin()
         : base(
             "home-assistant-plugin",
             "Home Assistant",
-            "Home Assistant integration with entity discovery. Version: 0.3.1")
+            "Home Assistant integration with entity discovery. Version: 0.5.0")
     {
     }
 
@@ -53,8 +56,9 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             Key = "EntityInclude",
             DisplayName = "Entity Include",
             Description =
-                "One rule per line. Examples: entity.sensor.temperature, device.A1MINI, integration.bambu_lab, domain.sensor, or * for all supported types. " +
-                "When set, Entity Domains is ignored. Only sensor/binary_sensor/climate/number/switch/cover/lock types are exposed (not automation, script, button, etc.). Reload after changes.",
+                "Comma-separated rules (entity/device/integration/domain/*). Combined with Entity Domains. " +
+                "entity/device/integration rules always include all matching entities. Exclusions override includes. " +
+                "Use * for all supported types (uncapped). Reload after changes.",
             Type = PluginConfigType.String,
             Value = _entityInclude
         },
@@ -63,21 +67,32 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             Key = "EntityDomains",
             DisplayName = "Entity Domains",
             Description =
-                "Used only when Entity Include is empty. Comma-separated domains or * for all supported types " +
-                "(sensor, binary_sensor, climate, number, input_number, switch, input_boolean, cover, lock). Default: sensor,climate,binary_sensor.",
+                "Always combined with Entity Include. Comma-separated domains or * for all supported types " +
+                "(uncapped). Default: sensor,climate,binary_sensor.",
             Type = PluginConfigType.String,
             Value = _entityDomains
+        },
+        new PluginConfigProperty
+        {
+            Key = "EntityExclude",
+            DisplayName = "Entity Exclude",
+            Description =
+                "Comma-separated rules with same syntax as Include. Exclusions are absolute and override all includes. " +
+                "Example: light.room, domain.input_boolean, integration.backup.",
+            Type = PluginConfigType.String,
+            Value = _entityExclude
         },
         new PluginConfigProperty
         {
             Key = "MaxEntities",
             DisplayName = "Max Entities",
             Description =
-                "Cap after filters apply. Results are sorted A–Z by entity id, so low values skip later sensors (e.g. sensor.a1mini_*). Raise this or use specific Entity Include rules.",
+                "Cap for domain/general pool only (default 50). Use 0 or * in Include/Domains for unlimited. " +
+                "entity/device/integration rules are never capped.",
             Type = PluginConfigType.Integer,
             Value = _maxEntities,
-            MinValue = 1,
-            MaxValue = 200,
+            MinValue = 0,
+            MaxValue = 500,
             Step = 1
         }
     ];
@@ -102,6 +117,10 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
                 _entityDomains = string.IsNullOrWhiteSpace(value?.ToString())
                     ? HomeAssistantSettings.DefaultEntityDomains
                     : value!.ToString()!;
+                _discoverySettingsDirty = true;
+                break;
+            case "EntityExclude":
+                _entityExclude = value?.ToString() ?? string.Empty;
                 _discoverySettingsDirty = true;
                 break;
             case "MaxEntities":
@@ -221,17 +240,19 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     private string BuildOkStatus(int entityCount)
     {
         int groupCount = _layout.Groups.Count;
-        string baseStatus = groupCount > 0
-            ? $"OK ({entityCount} entities in {groupCount} devices"
-            : $"OK ({entityCount} entities";
+        var status = $"OK ({entityCount} entities: {_layout.ExplicitCount} explicit + {_layout.PoolCount} from domains";
 
-        if (_layout.MatchedBeforeCap > entityCount)
+        if (_layout.PoolMatchedBeforeCap > _layout.PoolCount)
         {
-            baseStatus += $", {_layout.MatchedBeforeCap} matched - raise Max Entities";
+            status += $", {_layout.PoolMatchedBeforeCap} domain matches before cap";
         }
 
-        baseStatus += ")";
-        return baseStatus;
+        if (groupCount > 0)
+        {
+            status += $", {groupCount} devices";
+        }
+
+        return status + ")";
     }
 
     private async Task<string> DescribeEmptyDiscoveryAsync(CancellationToken cancellationToken)
@@ -266,6 +287,7 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
         AccessToken = _accessToken,
         EntityDomains = _entityDomains,
         EntityInclude = _entityInclude,
-        MaxEntities = _maxEntities > 0 ? _maxEntities : HomeAssistantSettings.DefaultMaxEntities,
+        EntityExclude = _entityExclude,
+        MaxEntities = _maxEntities,
     };
 }

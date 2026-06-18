@@ -1,10 +1,9 @@
 namespace InfoPanel.HomeAssistant.Core.Configuration;
 
+/// <summary>Home Assistant entity domains exposed as InfoPanel sensors or text entries.</summary>
 public static class ExposableEntityDomains
 {
-    /// <summary>
-    /// Domains that map cleanly to InfoPanel sensor or text entries.
-    /// </summary>
+    /// <summary>Domains included when using <c>*</c> or domain rules.</summary>
     public static readonly IReadOnlyList<string> Supported =
     [
         "sensor",
@@ -16,6 +15,7 @@ public static class ExposableEntityDomains
         "input_boolean",
         "cover",
         "lock",
+        "light",
     ];
 
     private static readonly HashSet<string> SupportedSet =
@@ -29,11 +29,17 @@ public static class ExposableEntityDomains
             "input_boolean",
             "cover",
             "lock",
+            "light",
         };
 
+    /// <summary>True when the token is a wildcard (<c>*</c>).</summary>
     public static bool IsWildcard(string? value) =>
         string.Equals(value?.Trim(), "*", StringComparison.Ordinal);
 
+    /// <summary>
+    /// True when the entity id belongs to a supported domain.
+    /// </summary>
+    /// <param name="entityId">Full entity id (e.g. sensor.temperature).</param>
     public static bool IsSupportedEntity(string entityId)
     {
         if (string.IsNullOrWhiteSpace(entityId))
@@ -50,6 +56,10 @@ public static class ExposableEntityDomains
         return SupportedSet.Contains(entityId[..dot]);
     }
 
+    /// <summary>
+    /// True when the entity should map to a text entry rather than a numeric sensor.
+    /// </summary>
+    /// <param name="entityId">Full entity id.</param>
     public static bool IsTextDomain(string entityId)
     {
         int dot = entityId.IndexOf('.');
@@ -61,6 +71,11 @@ public static class ExposableEntityDomains
         return TextDomains.Contains(entityId[..dot]);
     }
 
+    /// <summary>
+    /// Expands domain filter tokens into concrete domain names.
+    /// </summary>
+    /// <param name="filters">Raw domain tokens from configuration.</param>
+    /// <returns>Supported domains; empty or <c>*</c> returns all supported domains.</returns>
     public static IReadOnlyList<string> ExpandDomainFilters(IEnumerable<string> filters)
     {
         var list = filters
