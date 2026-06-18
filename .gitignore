@@ -1,0 +1,36 @@
+# Build / release artifacts
+*.zip
+*.pdb
+obj/
+[Dd]ebug/
+[Rr]elease/
+
+# Visual Studio / IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Local deploy / debug scripts (not part of the published repo)
+scripts/
+
+# Secrets and local plugin config (never commit tokens or URLs)
+config.ini
+*.config.json
+*.dll.ini
+.env
+.env.*
+
+# OS
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# NuGet
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/

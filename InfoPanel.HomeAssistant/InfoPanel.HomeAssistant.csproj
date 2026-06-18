@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <SatelliteResourceLanguages>en-US</SatelliteResourceLanguages>
+    <Version>0.3.1</Version>
+    <OutputPath Condition="'$(Configuration)' == 'Release'">bin\Release\net8.0\InfoPanel.HomeAssistant-v$(Version)\InfoPanel.HomeAssistant</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InfoPanel.HomeAssistant.Core\InfoPanel.HomeAssistant.Core.csproj" />
+    <ProjectReference Include="..\..\infopanel\InfoPanel.Plugins\InfoPanel.Plugins.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\PluginInfo.ini">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <TargetPath>PluginInfo.ini</TargetPath>
+    </None>
+  </ItemGroup>
+
+</Project>
