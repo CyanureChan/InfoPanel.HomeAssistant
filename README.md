@@ -92,6 +92,27 @@ Connection status example: `OK (73 entities: 23 explicit + 50 from domains, 5 de
 
 For large installs, prefer **WebSocket** — it avoids downloading every HA entity on each poll. Use a lower poll interval (e.g. 3–5s) for snappier InfoPanel updates while WS handles HA efficiently.
 
+## Plugin test mode (simulator)
+
+Run the plugin outside InfoPanel with verbose connection logging:
+
+```powershell
+# 1. Build the plugin
+dotnet build -c Release "InfoPanel.HomeAssistant/InfoPanel.HomeAssistant/InfoPanel.HomeAssistant.csproj"
+
+# 2. Run the simulator (loads your stored config from %LOCALAPPDATA%\InfoPanel\plugins\)
+dotnet run --project "infopanel/InfoPanel.Plugins.Simulator/InfoPanel.Plugins.Simulator.csproj"
+```
+
+The simulator sets `INFOPANEL_PLUGIN_TEST=1`, which enables `[HA:INFO]` / `[HA:DEBUG]` console logs for:
+
+- Config load (token redacted)
+- Update mode and poll interval
+- WebSocket connect / reconnect / `state_changed` events
+- Each update cycle fetch path (WebSocket cache vs REST fallback)
+
+Config is read from `%LOCALAPPDATA%\InfoPanel\plugins\home-assistant-plugin.config.json` — the same file InfoPanel uses.
+
 ## Rule syntax
 
 Rules are **comma-separated** (works in InfoPanel's single-line config field). Newlines also work when editing the JSON config file directly.

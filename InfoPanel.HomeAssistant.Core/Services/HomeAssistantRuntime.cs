@@ -49,6 +49,10 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
         Settings.UpdateMode = settings.UpdateMode;
         _api.Configure(Settings.BaseUrl, Settings.AccessToken);
 
+        HomeAssistantPluginLog.Info(
+            $"Settings applied: mode={Settings.UpdateMode}, poll={Settings.GetEffectivePollIntervalSeconds()}s, " +
+            $"entities cap={Settings.MaxEntities}, configured={IsConfigured}.");
+
         if (credentialsChanged || modeChanged)
         {
             _ = RestartStateStreamAsync(CancellationToken.None);
@@ -62,6 +66,7 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
     /// <returns>Discovery result with groups, counts, and registry status.</returns>
     public async Task<DiscoveryResult> DiscoverAsync(CancellationToken cancellationToken)
     {
+        HomeAssistantPluginLog.Info("Discovery started (registry + full REST states).");
         Registry = await _registryClient.FetchAsync(Settings.BaseUrl, Settings.AccessToken, cancellationToken);
         var allStates = await _api.GetAllStatesAsync(cancellationToken);
         int supportedCount = allStates.Count(s => ExposableEntityDomains.IsSupportedEntity(s.EntityId));
@@ -69,6 +74,11 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
         SelectedEntityIds = selection.Selected.Select(s => s.EntityId).ToList();
 
         ConfigureStateStream(selection.Selected);
+
+        HomeAssistantPluginLog.Info(
+            $"Discovery complete: {SelectedEntityIds.Count} selected " +
+            $"({selection.ExplicitCount} explicit + {selection.PoolCount} pool), " +
+            $"registry={(Registry.IsAvailable ? "ok" : "unavailable")}.");
 
         var groups = EntityContainerGrouper.Group(selection.Selected, Registry);
         string? registryWarning = Registry.IsAvailable
@@ -124,6 +134,25 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
         };
     }
 
+    /// <summary>Describes the active fetch path for diagnostics.</summary>
+    public string DescribeFetchPath()
+    {
+        if (SelectedEntityIds.Count == 0)
+        {
+            return "no entities selected";
+        }
+
+        return Settings.UpdateMode switch
+        {
+            StateUpdateMode.HttpPoll => "REST bulk GET /api/states",
+            StateUpdateMode.Hybrid when _stateStream.IsConnected =>
+                "Hybrid: WebSocket cache + per-entity REST sync",
+            StateUpdateMode.Hybrid => "Hybrid fallback: per-entity REST",
+            StateUpdateMode.WebSocket when _stateStream.IsConnected => "WebSocket cache (state_changed)",
+            _ => "WebSocket fallback: per-entity REST",
+        };
+    }
+
     private void ConfigureStateStream(IReadOnlyList<HomeAssistantEntityState> selectedStates)
     {
         _stateStream.SeedStates(selectedStates);
@@ -139,9 +168,14 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
             Settings.UpdateMode == StateUpdateMode.HttpPoll ||
             SelectedEntityIds.Count == 0)
         {
+            HomeAssistantPluginLog.Info(
+                Settings.UpdateMode == StateUpdateMode.HttpPoll
+                    ? "State stream not started (HttpPoll mode)."
+                    : "State stream not started (not configured or no entities).");
             return;
         }
 
+        HomeAssistantPluginLog.Info($"Starting state stream for {Settings.UpdateMode} mode.");
         await _stateStream.StartAsync(Settings.BaseUrl, Settings.AccessToken, cancellationToken);
     }
 
@@ -150,9 +184,11 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
     {
         if (_stateStream.IsConnected)
         {
+            HomeAssistantPluginLog.Debug("Fetch: WebSocket cache.");
             return _stateStream.GetSelectedStates();
         }
 
+        HomeAssistantPluginLog.Warn("Fetch: WebSocket offline, using per-entity REST.");
         return await FetchViaPerEntityRestAsync(cancellationToken);
     }
 
@@ -161,17 +197,20 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
     {
         if (_stateStream.IsConnected)
         {
+            HomeAssistantPluginLog.Debug("Fetch: Hybrid per-entity REST sync.");
             var synced = await _api.GetEntityStatesAsync(SelectedEntityIds, cancellationToken);
             _stateStream.SeedStates(synced);
             return _stateStream.GetSelectedStates();
         }
 
+        HomeAssistantPluginLog.Warn("Fetch: Hybrid fallback per-entity REST.");
         return await FetchViaPerEntityRestAsync(cancellationToken);
     }
 
     private async Task<IReadOnlyList<HomeAssistantEntityState>> FetchViaBulkRestAsync(
         CancellationToken cancellationToken)
     {
+        HomeAssistantPluginLog.Debug("Fetch: REST bulk GET /api/states.");
         var selected = SelectedEntityIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var all = await _api.GetAllStatesAsync(cancellationToken);
         return all
@@ -182,6 +221,7 @@ public sealed class HomeAssistantRuntime : IAsyncDisposable, IDisposable
     private async Task<IReadOnlyList<HomeAssistantEntityState>> FetchViaPerEntityRestAsync(
         CancellationToken cancellationToken)
     {
+        HomeAssistantPluginLog.Debug($"Fetch: per-entity REST for {SelectedEntityIds.Count} entities.");
         var states = await _api.GetEntityStatesAsync(SelectedEntityIds, cancellationToken);
         _stateStream.SeedStates(states);
         return states;

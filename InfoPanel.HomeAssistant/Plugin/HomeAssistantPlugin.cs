@@ -1,6 +1,5 @@
 ﻿using InfoPanel.HomeAssistant.Core.Configuration;
 using InfoPanel.HomeAssistant.Core.Services;
-using InfoPanel.HomeAssistant.Plugin;
 using InfoPanel.HomeAssistant.Plugin.Layout;
 using InfoPanel.Plugins;
 
@@ -232,6 +231,9 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             var states = await _runtime.FetchFilteredStatesAsync(cancellationToken);
             HomeAssistantPluginEngine.UpdateEntries(entries, states);
             _connectionStatus.Value = BuildOkStatus(entries.Count);
+            HomeAssistantPluginLog.Info(
+                $"Update: {_runtime.DescribeFetchPath()}, WS={_runtime.IsStateStreamConnected}, " +
+                $"states={states.Count}, status={_connectionStatus.Value}");
         }
         catch (Exception ex)
         {

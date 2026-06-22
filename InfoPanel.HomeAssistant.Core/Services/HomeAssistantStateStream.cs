@@ -34,18 +34,23 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
 
     public void SeedStates(IEnumerable<HomeAssistantEntityState> states)
     {
+        int count = 0;
         foreach (var state in states)
         {
             if (!string.IsNullOrWhiteSpace(state.EntityId))
             {
                 _states[state.EntityId] = state;
+                count++;
             }
         }
+
+        HomeAssistantPluginLog.Debug($"State cache seeded with {count} entities.");
     }
 
     public void SetEntityIds(IReadOnlyList<string> entityIds)
     {
         _entityIds = entityIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HomeAssistantPluginLog.Info($"WebSocket stream tracking {_entityIds.Count} entity ids.");
     }
 
     public IReadOnlyList<HomeAssistantEntityState> GetSelectedStates()
@@ -69,6 +74,7 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
             IsRunning = true;
         }
 
+        HomeAssistantPluginLog.Info($"Starting WebSocket state stream to {_baseUrl}.");
         return Task.CompletedTask;
     }
 
@@ -76,6 +82,11 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
     {
         lock (_lifecycleLock)
         {
+            if (IsRunning || IsConnected)
+            {
+                HomeAssistantPluginLog.Info("Stopping WebSocket state stream.");
+            }
+
             StopInternal();
         }
     }
@@ -124,17 +135,22 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
             await using var session = new HomeAssistantWebSocketSession();
             try
             {
+                HomeAssistantPluginLog.Debug("Connecting WebSocket and authenticating...");
                 await session.ConnectAndAuthenticateAsync(_baseUrl, _accessToken, cancellationToken);
                 await session.SubscribeStateChangesAsync(cancellationToken);
                 IsConnected = true;
                 LastError = null;
                 backoff = TimeSpan.FromSeconds(2);
+                HomeAssistantPluginLog.Info("WebSocket connected and subscribed to state_changed.");
 
                 while (!cancellationToken.IsCancellationRequested &&
                        session.State == WebSocketState.Open)
                 {
                     using JsonDocument doc = await session.ReceiveJsonAsync(cancellationToken);
-                    TryApplyStateChangedEvent(doc);
+                    if (TryApplyStateChangedEvent(doc, out string? entityId, out string? newState))
+                    {
+                        HomeAssistantPluginLog.Debug($"WS state_changed: {entityId} -> {newState}");
+                    }
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -145,6 +161,7 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
             {
                 IsConnected = false;
                 LastError = ex.Message;
+                HomeAssistantPluginLog.Error(ex, "WebSocket stream error");
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -152,6 +169,7 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
                 break;
             }
 
+            HomeAssistantPluginLog.Warn($"WebSocket reconnecting in {backoff.TotalSeconds:0}s...");
             try
             {
                 await Task.Delay(backoff, cancellationToken);
@@ -166,44 +184,48 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
 
         IsConnected = false;
         IsRunning = false;
+        HomeAssistantPluginLog.Info("WebSocket state stream stopped.");
     }
 
-    private void TryApplyStateChangedEvent(JsonDocument doc)
+    private bool TryApplyStateChangedEvent(JsonDocument doc, out string? entityId, out string? newStateValue)
     {
+        entityId = null;
+        newStateValue = null;
         if (!doc.RootElement.TryGetProperty("type", out var typeElement) ||
             !string.Equals(typeElement.GetString(), "event", StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
         if (!doc.RootElement.TryGetProperty("event", out var eventElement))
         {
-            return;
+            return false;
         }
 
         if (!eventElement.TryGetProperty("event_type", out var eventTypeElement) ||
             !string.Equals(eventTypeElement.GetString(), "state_changed", StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
         if (!eventElement.TryGetProperty("data", out var dataElement) ||
             !dataElement.TryGetProperty("entity_id", out var entityIdElement))
         {
-            return;
+            return false;
         }
 
-        string? entityId = entityIdElement.GetString();
+        entityId = entityIdElement.GetString();
         if (string.IsNullOrWhiteSpace(entityId) || !_entityIds.Contains(entityId))
         {
-            return;
+            return false;
         }
 
         if (!dataElement.TryGetProperty("new_state", out var newStateElement) ||
             newStateElement.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
             _states.TryRemove(entityId, out _);
-            return;
+            newStateValue = "(removed)";
+            return true;
         }
 
         var state = JsonSerializer.Deserialize<HomeAssistantEntityState>(
@@ -213,6 +235,10 @@ public sealed class HomeAssistantStateStream : IAsyncDisposable
         if (state != null && !string.IsNullOrWhiteSpace(state.EntityId))
         {
             _states[state.EntityId] = state;
+            newStateValue = state.State;
+            return true;
         }
+
+        return false;
     }
 }

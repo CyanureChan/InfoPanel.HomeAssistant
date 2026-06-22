@@ -1,4 +1,5 @@
 using System.Text.Json;
+using InfoPanel.HomeAssistant.Core.Services;
 using InfoPanel.Plugins;
 
 namespace InfoPanel.HomeAssistant.Plugin;
@@ -17,6 +18,7 @@ internal static class HostConfigLoader
 
         if (!File.Exists(path))
         {
+            HomeAssistantPluginLog.Warn($"No stored config at {path}");
             return;
         }
 
@@ -28,17 +30,28 @@ internal static class HostConfigLoader
 
             if (stored == null)
             {
+                HomeAssistantPluginLog.Warn($"Stored config at {path} was empty.");
                 return;
             }
 
+            HomeAssistantPluginLog.Info($"Loading stored config from {path} ({stored.Count} keys).");
+
             foreach (var (key, element) in stored)
             {
+                if (string.Equals(key, "AccessToken", StringComparison.OrdinalIgnoreCase))
+                {
+                    HomeAssistantPluginLog.Debug("Config key AccessToken: (redacted)");
+                    applyConfig(key, CoerceJsonElement(element));
+                    continue;
+                }
+
+                HomeAssistantPluginLog.Debug($"Config key {key}: {element}");
                 applyConfig(key, CoerceJsonElement(element));
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Host will retry applying config after Initialize; ignore parse errors here.
+            HomeAssistantPluginLog.Error(ex, $"Failed to read stored config at {path}");
         }
     }
 
