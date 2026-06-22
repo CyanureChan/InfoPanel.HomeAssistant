@@ -12,7 +12,7 @@
     <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <SatelliteResourceLanguages>en-US</SatelliteResourceLanguages>
-    <Version>0.5.0</Version>
+    <Version>0.6.0</Version>
     <OutputPath Condition="'$(Configuration)' == 'Release'">bin\Release\net8.0\InfoPanel.HomeAssistant-v$(Version)\InfoPanel.HomeAssistant</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>

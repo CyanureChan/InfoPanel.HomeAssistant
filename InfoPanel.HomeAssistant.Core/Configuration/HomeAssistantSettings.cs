@@ -9,6 +9,15 @@ public sealed class HomeAssistantSettings
     /// <summary>Default cap for the domain pool when Max Entities is not set.</summary>
     public const int DefaultMaxEntities = 50;
 
+    /// <summary>Default seconds between plugin update cycles.</summary>
+    public const int DefaultPollIntervalSeconds = 15;
+
+    /// <summary>Minimum allowed poll interval in seconds.</summary>
+    public const int MinPollIntervalSeconds = 3;
+
+    /// <summary>Maximum allowed poll interval in seconds.</summary>
+    public const int MaxPollIntervalSeconds = 300;
+
     /// <summary>Home Assistant base URL without trailing slash.</summary>
     public string BaseUrl { get; set; } = string.Empty;
 
@@ -26,6 +35,16 @@ public sealed class HomeAssistantSettings
 
     /// <summary>Domain pool cap; 0 means unlimited.</summary>
     public int MaxEntities { get; set; } = DefaultMaxEntities;
+
+    /// <summary>Seconds between plugin update cycles.</summary>
+    public int PollIntervalSeconds { get; set; } = DefaultPollIntervalSeconds;
+
+    /// <summary>How entity states are synchronized with Home Assistant.</summary>
+    public StateUpdateMode UpdateMode { get; set; } = StateUpdateMode.WebSocket;
+
+    /// <summary>Clamps <see cref="PollIntervalSeconds"/> to the allowed range.</summary>
+    public int GetEffectivePollIntervalSeconds() =>
+        Math.Clamp(PollIntervalSeconds, MinPollIntervalSeconds, MaxPollIntervalSeconds);
 
     /// <summary>True when URL and token are both set.</summary>
     public bool IsConfigured =>

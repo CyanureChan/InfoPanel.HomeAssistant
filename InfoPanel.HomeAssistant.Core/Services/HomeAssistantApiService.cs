@@ -44,6 +44,51 @@ public sealed class HomeAssistantApiService : IDisposable
         return JsonSerializer.Deserialize<List<HomeAssistantEntityState>>(json) ?? [];
     }
 
+    /// <summary>
+    /// Fetches current states for the given entity ids via individual REST calls.
+    /// </summary>
+    /// <param name="entityIds">Entity ids to fetch.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<IReadOnlyList<HomeAssistantEntityState>> GetEntityStatesAsync(
+        IEnumerable<string> entityIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = entityIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        using var gate = new SemaphoreSlim(8);
+        var tasks = ids.Select(async entityId =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                return await GetEntityStateAsync(entityId, cancellationToken);
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        var results = await Task.WhenAll(tasks);
+        return results
+            .Where(state => state != null)
+            .Cast<HomeAssistantEntityState>()
+            .OrderBy(s => s.EntityId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task<HomeAssistantEntityState> GetEntityStateAsync(
         string entityId,
         CancellationToken cancellationToken)

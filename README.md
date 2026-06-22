@@ -1,6 +1,6 @@
 # InfoPanel.HomeAssistant
 
-Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.5.0** adds unlimited `*` selection, absolute exclusions, plugin Reload fixes (InfoPanel 1.4+), XML documentation, and one-type-per-file structure.
+Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.6.0** adds configurable poll interval and WebSocket live updates.
 
 ## Features
 
@@ -10,7 +10,11 @@ Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPa
 - **Tiered cap**: entity/device/integration rules never capped; domain pool capped unless `*` or Max Entities = 0
 - Comma-separated rules (InfoPanel UI friendly) with optional quoting
 - **Integration.Device containers** — e.g. `Bambu Lab.A1MINI`, `Backup.Backup`
-- Poll every 15 seconds; connection status in **System** container
+- Poll interval and update mode configurable in Plugins UI
+- **WebSocket** (default): live HA push; poll interval refreshes InfoPanel only
+- **HttpPoll**: full REST fetch each interval (legacy)
+- **Hybrid**: WebSocket plus per-entity REST sync each interval
+- Connection status in **System** container
 
 ## Home Assistant concepts
 
@@ -54,8 +58,10 @@ Restart InfoPanel, then configure under **Plugins → Home Assistant**.
 | Entity Domains | `sensor,climate,binary_sensor` or `*` |
 | Entity Exclude | `light.room, domain.input_boolean, integration.backup` |
 | Max Entities | `50` (pool cap only; use `0` or `*` for unlimited) |
+| Update Mode | `WebSocket` (default), `HttpPoll`, or `Hybrid` |
+| Poll Interval | `15` seconds (3–300; WebSocket mode = InfoPanel refresh rate) |
 
-Click **Reload** after changing filters — the sensor tree now refreshes without restarting InfoPanel (InfoPanel 1.4+).
+Click **Reload** after changing entity filters.
 
 ## Selection model
 
@@ -74,7 +80,17 @@ Example: `EntityDomains=sensor` + `device."My Printer"` + `MaxEntities=50` → a
 
 Example: `EntityInclude=*` + `EntityExclude=domain.input_boolean, integration.backup` → all supported entities except Input Booleans and the Backup integration.
 
-Connection status example: `OK (73 entities: 23 explicit + 50 from domains, 5 devices)`
+Connection status example: `OK (73 entities: 23 explicit + 50 from domains, 5 devices, WebSocket, 15s, WS connected)`
+
+## Update modes
+
+| Mode | HA traffic | Poll interval controls |
+|------|------------|------------------------|
+| **WebSocket** (default) | Live `state_changed` push; per-entity REST only if WS is down | How often InfoPanel refreshes displayed values |
+| **HttpPoll** | Full `GET /api/states` each interval | REST fetch frequency (legacy v0.5 behavior) |
+| **Hybrid** | WebSocket push + per-entity REST sync each interval | REST sync frequency |
+
+For large installs, prefer **WebSocket** — it avoids downloading every HA entity on each poll. Use a lower poll interval (e.g. 3–5s) for snappier InfoPanel updates while WS handles HA efficiently.
 
 ## Rule syntax
 

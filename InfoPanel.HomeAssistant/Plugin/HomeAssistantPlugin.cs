@@ -22,16 +22,19 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     private string _entityInclude = string.Empty;
     private string _entityExclude = string.Empty;
     private int _maxEntities = HomeAssistantSettings.DefaultMaxEntities;
+    private int _pollIntervalSeconds = HomeAssistantSettings.DefaultPollIntervalSeconds;
+    private string _updateMode = StateUpdateModeParser.WebSocket;
 
     public HomeAssistantPlugin()
         : base(
             "home-assistant-plugin",
             "Home Assistant",
-            "Home Assistant integration with entity discovery. Version: 0.5.0")
+            "Home Assistant integration with entity discovery. Version: 0.6.0")
     {
     }
 
-    public override TimeSpan UpdateInterval => TimeSpan.FromSeconds(15);
+    public override TimeSpan UpdateInterval => TimeSpan.FromSeconds(
+        Math.Clamp(_pollIntervalSeconds, HomeAssistantSettings.MinPollIntervalSeconds, HomeAssistantSettings.MaxPollIntervalSeconds));
 
     public IReadOnlyList<PluginConfigProperty> ConfigProperties =>
     [
@@ -50,6 +53,30 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             Description = "Long-Lived Access Token from your Home Assistant profile.",
             Type = PluginConfigType.String,
             Value = _accessToken
+        },
+        new PluginConfigProperty
+        {
+            Key = "UpdateMode",
+            DisplayName = "Update Mode",
+            Description =
+                "WebSocket: live HA push (default). HttpPoll: full REST fetch each interval. " +
+                "Hybrid: WebSocket plus per-entity REST sync each interval.",
+            Type = PluginConfigType.Choice,
+            Value = _updateMode,
+            Options = StateUpdateModeParser.Options.ToArray()
+        },
+        new PluginConfigProperty
+        {
+            Key = "PollIntervalSeconds",
+            DisplayName = "Poll Interval (seconds)",
+            Description =
+                "Seconds between plugin update cycles. WebSocket mode uses this for InfoPanel refresh only; " +
+                "HttpPoll mode controls REST fetch frequency.",
+            Type = PluginConfigType.Integer,
+            Value = _pollIntervalSeconds,
+            MinValue = HomeAssistantSettings.MinPollIntervalSeconds,
+            MaxValue = HomeAssistantSettings.MaxPollIntervalSeconds,
+            Step = 1
         },
         new PluginConfigProperty
         {
@@ -109,6 +136,21 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
                 _accessToken = value?.ToString() ?? string.Empty;
                 _discoverySettingsDirty = true;
                 break;
+            case "UpdateMode":
+                _updateMode = string.IsNullOrWhiteSpace(value?.ToString())
+                    ? StateUpdateModeParser.WebSocket
+                    : value!.ToString()!;
+                break;
+            case "PollIntervalSeconds":
+                if (value is int intValue)
+                {
+                    _pollIntervalSeconds = intValue;
+                }
+                else if (int.TryParse(value?.ToString(), out int parsed))
+                {
+                    _pollIntervalSeconds = parsed;
+                }
+                break;
             case "EntityInclude":
                 _entityInclude = value?.ToString() ?? string.Empty;
                 _discoverySettingsDirty = true;
@@ -124,13 +166,13 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
                 _discoverySettingsDirty = true;
                 break;
             case "MaxEntities":
-                if (value is int intValue)
+                if (value is int maxValue)
                 {
-                    _maxEntities = intValue;
+                    _maxEntities = maxValue;
                 }
-                else if (int.TryParse(value?.ToString(), out int parsed))
+                else if (int.TryParse(value?.ToString(), out int parsedMax))
                 {
-                    _maxEntities = parsed;
+                    _maxEntities = parsedMax;
                 }
                 _discoverySettingsDirty = true;
                 break;
@@ -252,6 +294,13 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             status += $", {groupCount} devices";
         }
 
+        status += $", {StateUpdateModeParser.ToConfigValue(BuildSettings().UpdateMode)}, {_pollIntervalSeconds}s";
+
+        if (BuildSettings().UpdateMode != StateUpdateMode.HttpPoll)
+        {
+            status += _runtime.IsStateStreamConnected ? ", WS connected" : ", WS reconnecting";
+        }
+
         return status + ")";
     }
 
@@ -289,5 +338,7 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
         EntityInclude = _entityInclude,
         EntityExclude = _entityExclude,
         MaxEntities = _maxEntities,
+        PollIntervalSeconds = _pollIntervalSeconds,
+        UpdateMode = StateUpdateModeParser.Parse(_updateMode),
     };
 }
