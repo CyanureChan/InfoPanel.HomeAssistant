@@ -30,6 +30,18 @@ internal sealed class HomeAssistantWebSocketSession : IAsyncDisposable
         await WaitForAuthResultAsync(cancellationToken);
     }
 
+    public async Task<int> SubscribeEntitiesAsync(
+        IReadOnlyList<string> entityIds,
+        CancellationToken cancellationToken)
+    {
+        int id = _nextMessageId++;
+        await SendJsonAsync(
+            new { id, type = "subscribe_entities", entity_ids = entityIds },
+            cancellationToken);
+        await WaitForResultSuccessAsync(id, cancellationToken);
+        return id;
+    }
+
     public async Task<int> SubscribeStateChangesAsync(CancellationToken cancellationToken)
     {
         int id = _nextMessageId++;
