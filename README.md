@@ -1,19 +1,17 @@
 # InfoPanel.HomeAssistant
 
-Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.6.0** adds configurable poll interval and WebSocket live updates.
+Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPanel) **1.4+**. **v0.6.2** uses WebSocket `subscribe_entities`, dirty-only updates, and a single configurable refresh interval.
 
 ## Features
 
 - Connect via Long-Lived Access Token (REST + WebSocket registry)
 - **Entity Include** + **Entity Domains** combined (union)
-- **Entity Exclude** — absolute; always overrides includes at every tier
+- **Entity Exclude** - absolute; always overrides includes at every tier
 - **Tiered cap**: entity/device/integration rules never capped; domain pool capped unless `*` or Max Entities = 0
 - Comma-separated rules (InfoPanel UI friendly) with optional quoting
-- **Integration.Device containers** — e.g. `Bambu Lab.A1MINI`, `Backup.Backup`
-- Poll interval and update mode configurable in Plugins UI
-- **WebSocket** (default): live HA push; poll interval refreshes InfoPanel only
-- **HttpPoll**: full REST fetch each interval (legacy)
-- **Hybrid**: WebSocket plus per-entity REST sync each interval
+- **Integration.Device containers** - e.g. `Bambu Lab.A1MINI`, `Backup.Backup`
+- **Refresh interval** configurable in Plugins UI (default 5s, min 1s, max 300s)
+- **WebSocket** with `subscribe_entities` (compressed deltas); automatic per-entity REST fallback when WS is down
 - Connection status in **System** container
 
 ## Home Assistant concepts
@@ -25,7 +23,7 @@ Home Assistant integration for [InfoPanel](https://github.com/hongyinghsl/InfoPa
 | **Integration** | Platform that created the entity (`mqtt`, `backup`, `bambu_lab`) | `integration.backup` rule; also the first part of container names |
 | **Device** | Physical or logical device grouping entities | `device."Front Door"` rule; container name is `{Integration}.{DeviceName}` |
 
-Container names come from the HA device registry when available. Example: the backup integration’s device appears as **Backup.Backup** — exclude it with `integration.backup`.
+Container names come from the HA device registry when available. Example: the backup integration's device appears as **Backup.Backup** - exclude it with `integration.backup`.
 
 ## Quick Start
 
@@ -40,7 +38,7 @@ Container names come from the HA device registry when available. Example: the ba
 dotnet build InfoPanel.HomeAssistant/InfoPanel.HomeAssistant/InfoPanel.HomeAssistant.csproj -c Release
 ```
 
-Copy Release output to:
+Copy the Release output folder contents to:
 
 ```
 %ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\
@@ -57,61 +55,46 @@ Restart InfoPanel, then configure under **Plugins → Home Assistant**.
 | Entity Include | `*` or `device."My Printer", integration.bambu_lab` |
 | Entity Domains | `sensor,climate,binary_sensor` or `*` |
 | Entity Exclude | `light.room, domain.input_boolean, integration.backup` |
-| Max Entities | `50` (pool cap only; use `0` or `*` for unlimited) |
-| Update Mode | `WebSocket` (default), `HttpPoll`, or `Hybrid` |
-| Poll Interval | `15` seconds (3–300; WebSocket mode = InfoPanel refresh rate) |
+| Max Entities | `2000` (pool safeguard; use `0` or `*` for unlimited) |
+| Refresh Interval | `5` seconds (1-300) |
 
-Click **Reload** after changing entity filters.
+Click **Reload** after changing entity filters (Include, Domains, Exclude, Max Entities, URL, or token). The sensor tree refreshes without restarting InfoPanel (InfoPanel 1.4+).
+
+Legacy saved keys (`UpdateMode`, `CatalogRefreshSeconds`) are ignored with a one-time log.
 
 ## Selection model
 
 ```text
-Final set = (Include explicit + Include domains + EntityDomains) − Exclude
+Final set = (Include explicit + Include domains + EntityDomains) - Exclude
 ```
 
-**Exclusions are absolute.** If you include all lights (`domain.light` or `*`) and exclude `light.room`, that entity is never listed — even when matched by an explicit device or integration rule.
+**Exclusions are absolute.** If you include all lights (`domain.light` or `*`) and exclude `light.room`, that entity is never listed, even when matched by an explicit device or integration rule.
 
 | Tier | Rules | Cap |
 |------|-------|-----|
 | **Explicit** | `entity.*`, `device.*`, `integration.*` | Never capped |
-| **Domain pool** | `EntityDomains`, `domain.*`, `*` in Include | Capped at **Max Entities** unless `*` or Max Entities = **0** |
+| **Domain pool** | `EntityDomains`, `domain.*`, `*` in Include | Capped at **Max Entities** (default 2000) unless `*` or Max Entities = **0** |
 
-Example: `EntityDomains=sensor` + `device."My Printer"` + `MaxEntities=50` → all printer entities + up to 50 sensors.
+**Unlimited entities:** set `Entity Include` or `Entity Domains` to `*`, or set **Max Entities** to `0`.
+
+Example: `EntityDomains=sensor` + `device."My Printer"` + `MaxEntities=2000` → all printer entities + up to 2000 sensors.
 
 Example: `EntityInclude=*` + `EntityExclude=domain.input_boolean, integration.backup` → all supported entities except Input Booleans and the Backup integration.
 
-Connection status example: `OK (73 entities: 23 explicit + 50 from domains, 5 devices, WebSocket, 15s, WS connected)`
+Connection status example: `OK (120 entities: 10 explicit + 110 from domains, 8 devices, subscribe_entities, 5s refresh, WS connected)`
 
-## Update modes
+## Transport and refresh
 
-| Mode | HA traffic | Poll interval controls |
-|------|------------|------------------------|
-| **WebSocket** (default) | Live `state_changed` push; per-entity REST only if WS is down | How often InfoPanel refreshes displayed values |
-| **HttpPoll** | Full `GET /api/states` each interval | REST fetch frequency (legacy v0.5 behavior) |
-| **Hybrid** | WebSocket push + per-entity REST sync each interval | REST sync frequency |
+| Path | When | HA traffic |
+|------|------|------------|
+| **subscribe_entities** | WS connected (default) | Compressed snapshot + deltas for subscribed ids only |
+| **state_changed** | subscribe_entities unavailable | Global events; non-selected entities ignored |
+| **Per-entity REST** | WS disconnected | `GET /api/states/{entity_id}` for **dirty ids only** |
+| **Bulk REST** | Reload / discovery | One `GET /api/states` for entity selection |
 
-For large installs, prefer **WebSocket** — it avoids downloading every HA entity on each poll. Use a lower poll interval (e.g. 3–5s) for snappier InfoPanel updates while WS handles HA efficiently.
+Home Assistant pushes state changes to the plugin cache immediately. The **refresh interval** controls how often dirty values are applied to InfoPanel entries. When nothing changed, poll cycles are skipped.
 
-## Plugin test mode (simulator)
-
-Run the plugin outside InfoPanel with verbose connection logging:
-
-```powershell
-# 1. Build the plugin
-dotnet build -c Release "InfoPanel.HomeAssistant/InfoPanel.HomeAssistant/InfoPanel.HomeAssistant.csproj"
-
-# 2. Run the simulator (loads your stored config from %LOCALAPPDATA%\InfoPanel\plugins\)
-dotnet run --project "infopanel/InfoPanel.Plugins.Simulator/InfoPanel.Plugins.Simulator.csproj"
-```
-
-The simulator sets `INFOPANEL_PLUGIN_TEST=1`, which enables `[HA:INFO]` / `[HA:DEBUG]` console logs for:
-
-- Config load (token redacted)
-- Update mode and poll interval
-- WebSocket connect / reconnect / `state_changed` events
-- Each update cycle fetch path (WebSocket cache vs REST fallback)
-
-Config is read from `%LOCALAPPDATA%\InfoPanel\plugins\home-assistant-plugin.config.json` — the same file InfoPanel uses.
+A safety full sync marks all entities dirty every 60 poll cycles.
 
 ## Rule syntax
 
@@ -181,33 +164,35 @@ Plugin ID: `home-assistant-plugin`
 
 ## Development
 
-Requires .NET 8 SDK and a local clone of the InfoPanel repository.
+Requires .NET 8 SDK and a local clone of the InfoPanel repository (for `InfoPanel.Plugins` references).
 
 ```
 InfoPanel.HomeAssistant.Core/
   Configuration/     Settings and supported domains
   Mapping/           Grouping, slugs, state parsing
   Models/            API and discovery DTOs
-  Rules/             Rule parsing (one type per file)
-  Services/          API, registry, selection
+  Rules/             Rule parsing
+  Services/          API, registry, WebSocket state stream, selection
 InfoPanel.HomeAssistant/
   Plugin/            IPlugin entry point and engine
   Plugin/Layout/     Discovery layout types
 ```
 
-Public APIs include XML documentation summaries (`GenerateDocumentationFile` enabled on Core).
+Build Release and copy output to `%ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\`, or distribute a release zip.
 
-Build Release and copy to `%ProgramData%\InfoPanel\plugins\InfoPanel.HomeAssistant\`, or import `InfoPanel.HomeAssistant.zip`.
+Set environment variable `INFOPANEL_PLUGIN_TEST=1` to enable verbose plugin logging to the InfoPanel logs folder.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---------|-------|
 | Device entities missing | Use `device.*` or `integration.*` (explicit tier); domain cap does not truncate them |
+| Too few entities with `*` or Max Entities = 0 | Click **Reload** after saving config; confirm plugin version is 0.6.2+ |
 | Too many domain entities | Lower Max Entities, add Entity Exclude, or use targeted domains instead of `*` |
 | Excluded entity still visible | Click **Reload**; exclusion applies at discovery time |
 | `device.*` matches nothing | WebSocket registry required; try device UUID |
-| Reload does not update tree | Update InfoPanel to a build that includes the PluginSensors sync fix |
+| Values stale while WS connected | Lower refresh interval; check connection status for `WS connected` |
+| Reload does not update tree | Update InfoPanel to 1.4+ with plugin Reload support |
 
 Logs: `%LOCALAPPDATA%\InfoPanel\logs\plugin-host-InfoPanel.HomeAssistant*.log`
 
