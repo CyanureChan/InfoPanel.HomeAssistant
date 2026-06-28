@@ -12,17 +12,12 @@ internal static class HomeAssistantPluginEngine
     public const string SystemContainerId = "system";
 
     /// <summary>Applies connection and filter settings to the runtime.</summary>
-    /// <param name="runtime">Shared Home Assistant runtime.</param>
-    /// <param name="settings">Configuration to apply.</param>
     public static void ApplySettings(HomeAssistantRuntime runtime, Core.Configuration.HomeAssistantSettings settings) =>
         runtime.ApplySettings(settings);
 
     /// <summary>
     /// Discovers entities and maps them to plugin layout groups.
     /// </summary>
-    /// <param name="runtime">Configured runtime with API access.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Layout with grouped entity entries and discovery metadata.</returns>
     public static async Task<DiscoveredPluginLayout> DiscoverLayoutAsync(
         HomeAssistantRuntime runtime,
         CancellationToken cancellationToken)
@@ -37,9 +32,20 @@ internal static class HomeAssistantPluginEngine
             })
             .ToList();
 
+        var allEntries = groups.SelectMany(g => g.Entries).ToList();
+        var entryByEntityId = BuildEntryMap(allEntries);
+
+        ApplyInitialStates(entryByEntityId, discovery.SelectedStates);
+
+        HomeAssistantPluginLog.Info(
+            $"Layout built: {allEntries.Count} entries in {groups.Count} groups " +
+            $"(discovery selected {discovery.SelectedStates.Count}).");
+
         return new DiscoveredPluginLayout
         {
             Groups = groups,
+            AllEntries = allEntries,
+            EntryByEntityId = entryByEntityId,
             RegistryWarning = discovery.RegistryWarning,
             ExplicitCount = discovery.ExplicitCount,
             PoolCount = discovery.PoolCount,
@@ -51,9 +57,6 @@ internal static class HomeAssistantPluginEngine
     /// <summary>
     /// Registers discovered groups and the system container with the plugin host.
     /// </summary>
-    /// <param name="containers">Host container list from <see cref="BasePlugin.Load"/>.</param>
-    /// <param name="layout">Discovered entity layout.</param>
-    /// <param name="connectionStatus">Connection status text entry.</param>
     public static void RegisterLayout(
         List<IPluginContainer> containers,
         DiscoveredPluginLayout layout,
@@ -72,8 +75,6 @@ internal static class HomeAssistantPluginEngine
     }
 
     /// <summary>Adds entity entries to a plugin container.</summary>
-    /// <param name="container">Target container.</param>
-    /// <param name="entries">Entity entries to register.</param>
     public static void RegisterEntries(IPluginContainer container, IEnumerable<EntityEntry> entries)
     {
         foreach (var entry in entries)
@@ -82,18 +83,58 @@ internal static class HomeAssistantPluginEngine
         }
     }
 
-    /// <summary>Updates all entity entries from fresh Home Assistant states.</summary>
-    /// <param name="entries">Entries to update.</param>
-    /// <param name="states">Current entity states keyed by entity id.</param>
-    public static void UpdateEntries(IEnumerable<EntityEntry> entries, IEnumerable<HomeAssistantEntityState> states)
+    /// <summary>Applies dirty states to matching entries only.</summary>
+    /// <returns>Number of entries whose displayed value changed.</returns>
+    public static int ApplyStates(
+        IReadOnlyDictionary<string, EntityEntry> entryByEntityId,
+        IEnumerable<HomeAssistantEntityState> states)
     {
-        var byId = states.ToDictionary(s => s.EntityId, StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
+        int changed = 0;
+        foreach (var state in states)
         {
-            if (byId.TryGetValue(entry.EntityId, out var state))
+            if (entryByEntityId.TryGetValue(state.EntityId, out var entry) &&
+                entry.ApplyState(state))
             {
-                entry.ApplyState(state);
+                changed++;
             }
         }
+
+        return changed;
+    }
+
+    private static Dictionary<string, EntityEntry> BuildEntryMap(IReadOnlyList<EntityEntry> allEntries)
+    {
+        var map = new Dictionary<string, EntityEntry>(allEntries.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in allEntries)
+        {
+            if (map.TryGetValue(entry.EntityId, out var existing))
+            {
+                HomeAssistantPluginLog.Warn(
+                    $"Duplicate entity id in layout: {entry.EntityId} " +
+                    $"(keeping {existing.Data.Id}, skipping {entry.Data.Id}).");
+                continue;
+            }
+
+            map[entry.EntityId] = entry;
+        }
+
+        return map;
+    }
+
+    private static void ApplyInitialStates(
+        IReadOnlyDictionary<string, EntityEntry> entryByEntityId,
+        IReadOnlyList<HomeAssistantEntityState> states)
+    {
+        int applied = 0;
+        foreach (var state in states)
+        {
+            if (entryByEntityId.TryGetValue(state.EntityId, out var entry))
+            {
+                entry.ApplyInitialState(state);
+                applied++;
+            }
+        }
+
+        HomeAssistantPluginLog.Debug($"Initial state applied to {applied}/{states.Count} entries.");
     }
 }

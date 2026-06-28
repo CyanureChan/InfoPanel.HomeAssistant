@@ -1,9 +1,15 @@
 namespace InfoPanel.HomeAssistant.Core.Services;
 
-/// <summary>Lightweight console logging for plugin simulator and test runs.</summary>
+/// <summary>Lightweight logging for plugin simulator and test runs (console + file).</summary>
 public static class HomeAssistantPluginLog
 {
     private static readonly object Gate = new();
+    private static readonly string LogDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "InfoPanel",
+        "logs");
+
+    private static string? _logFilePath;
 
     static HomeAssistantPluginLog()
     {
@@ -15,9 +21,16 @@ public static class HomeAssistantPluginLog
 
         Enabled = string.Equals(flag, "1", StringComparison.Ordinal) ||
                   string.Equals(flag, "true", StringComparison.OrdinalIgnoreCase);
+
+        if (Enabled)
+        {
+            EnsureLogFilePath();
+        }
     }
 
     public static bool Enabled { get; set; }
+
+    public static string? LogFilePath => _logFilePath;
 
     public static void Info(string message) => Write("INFO", message);
 
@@ -30,6 +43,21 @@ public static class HomeAssistantPluginLog
     public static void Error(Exception ex, string message) =>
         Write("ERROR", $"{message}: {ex.Message}");
 
+    private static void EnsureLogFilePath()
+    {
+        if (_logFilePath != null)
+        {
+            return;
+        }
+
+        string? customPath = Environment.GetEnvironmentVariable("INFOPANEL_HA_PLUGIN_LOG_FILE");
+        _logFilePath = string.IsNullOrWhiteSpace(customPath)
+            ? Path.Combine(LogDirectory, "home-assistant-plugin-test.log")
+            : customPath.Trim();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(_logFilePath)!);
+    }
+
     private static void Write(string level, string message)
     {
         if (!Enabled)
@@ -37,9 +65,26 @@ public static class HomeAssistantPluginLog
             return;
         }
 
+        EnsureLogFilePath();
+        string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [HA:{level}] {message}";
+
         lock (Gate)
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [HA:{level}] {message}");
+
+            if (_logFilePath == null)
+            {
+                return;
+            }
+
+            try
+            {
+                File.AppendAllText(_logFilePath, line + Environment.NewLine);
+            }
+            catch
+            {
+                // Never break plugin updates because logging failed.
+            }
         }
     }
 }

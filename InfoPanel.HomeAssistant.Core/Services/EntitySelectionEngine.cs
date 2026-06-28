@@ -63,6 +63,8 @@ public static class EntitySelectionEngine
 
         var selected = stateList
             .Where(s => selectedIds.Contains(s.EntityId))
+            .GroupBy(s => s.EntityId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
             .OrderBy(s => s.EntityId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -111,6 +113,13 @@ public static class EntitySelectionEngine
                EntityRuleParser.Tokenize(settings.EntityDomains).Any(ExposableEntityDomains.IsWildcard);
     }
 
-    private static int ResolvePoolCap(HomeAssistantSettings settings) =>
-        settings.MaxEntities > 0 ? settings.MaxEntities : HomeAssistantSettings.DefaultMaxEntities;
+    private static int ResolvePoolCap(HomeAssistantSettings settings)
+    {
+        if (settings.MaxEntities <= 0)
+        {
+            return int.MaxValue;
+        }
+
+        return settings.MaxEntities;
+    }
 }

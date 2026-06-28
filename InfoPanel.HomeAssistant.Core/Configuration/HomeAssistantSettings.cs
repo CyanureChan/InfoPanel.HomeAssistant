@@ -6,17 +6,23 @@ public sealed class HomeAssistantSettings
     /// <summary>Default comma-separated domain list when Entity Domains is empty.</summary>
     public const string DefaultEntityDomains = "sensor,climate,binary_sensor";
 
-    /// <summary>Default cap for the domain pool when Max Entities is not set.</summary>
-    public const int DefaultMaxEntities = 50;
+    /// <summary>Default cap for the domain pool (safeguard; use 0 or * for unlimited).</summary>
+    public const int DefaultMaxEntities = 2000;
 
-    /// <summary>Default seconds between plugin update cycles.</summary>
-    public const int DefaultPollIntervalSeconds = 15;
+    /// <summary>Maximum allowed Max Entities value in the Plugins UI.</summary>
+    public const int MaxMaxEntities = 10000;
+
+    /// <summary>Default seconds between entity value refresh cycles.</summary>
+    public const int DefaultPollIntervalSeconds = 5;
 
     /// <summary>Minimum allowed poll interval in seconds.</summary>
-    public const int MinPollIntervalSeconds = 3;
+    public const int MinPollIntervalSeconds = 1;
 
     /// <summary>Maximum allowed poll interval in seconds.</summary>
     public const int MaxPollIntervalSeconds = 300;
+
+    /// <summary>Poll cycles between forced full dirty apply (safety net).</summary>
+    public const int FullSyncPollInterval = 60;
 
     /// <summary>Home Assistant base URL without trailing slash.</summary>
     public string BaseUrl { get; set; } = string.Empty;
@@ -36,11 +42,8 @@ public sealed class HomeAssistantSettings
     /// <summary>Domain pool cap; 0 means unlimited.</summary>
     public int MaxEntities { get; set; } = DefaultMaxEntities;
 
-    /// <summary>Seconds between plugin update cycles.</summary>
+    /// <summary>Seconds between entity value refresh cycles.</summary>
     public int PollIntervalSeconds { get; set; } = DefaultPollIntervalSeconds;
-
-    /// <summary>How entity states are synchronized with Home Assistant.</summary>
-    public StateUpdateMode UpdateMode { get; set; } = StateUpdateMode.WebSocket;
 
     /// <summary>Clamps <see cref="PollIntervalSeconds"/> to the allowed range.</summary>
     public int GetEffectivePollIntervalSeconds() =>
@@ -54,7 +57,6 @@ public sealed class HomeAssistantSettings
     /// <summary>
     /// Expands <see cref="EntityDomains"/> into concrete domain names.
     /// </summary>
-    /// <returns>Domain list; <c>*</c> expands to all supported domains.</returns>
     public IReadOnlyList<string> GetDomainFilters() =>
         ExposableEntityDomains.ExpandDomainFilters(
             EntityDomains.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));

@@ -8,7 +8,7 @@ internal static class HostConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static void ApplyStoredConfig(string pluginId, Action<string, object?> applyConfig)
+    public static void ApplyStoredConfig(string pluginId, Action<string, object?> applyConfigValue)
     {
         string path = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -38,15 +38,29 @@ internal static class HostConfigLoader
 
             foreach (var (key, element) in stored)
             {
+                if (string.Equals(key, "UpdateMode", StringComparison.OrdinalIgnoreCase))
+                {
+                    HomeAssistantPluginLog.Info(
+                        "Stored UpdateMode ignored (WebSocket with automatic REST fallback).");
+                    continue;
+                }
+
+                if (string.Equals(key, "CatalogRefreshSeconds", StringComparison.OrdinalIgnoreCase))
+                {
+                    HomeAssistantPluginLog.Info(
+                        "Stored CatalogRefreshSeconds ignored in v0.6.1; use Refresh Interval only.");
+                    continue;
+                }
+
                 if (string.Equals(key, "AccessToken", StringComparison.OrdinalIgnoreCase))
                 {
                     HomeAssistantPluginLog.Debug("Config key AccessToken: (redacted)");
-                    applyConfig(key, CoerceJsonElement(element));
+                    applyConfigValue(key, CoerceJsonElement(element));
                     continue;
                 }
 
                 HomeAssistantPluginLog.Debug($"Config key {key}: {element}");
-                applyConfig(key, CoerceJsonElement(element));
+                applyConfigValue(key, CoerceJsonElement(element));
             }
         }
         catch (Exception ex)

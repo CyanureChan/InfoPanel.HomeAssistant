@@ -41,7 +41,12 @@ public sealed class HomeAssistantApiService : IDisposable
         string url = $"{_baseUrl}/api/states";
         string json = await GetStringAsync(url, cancellationToken);
 
-        return JsonSerializer.Deserialize<List<HomeAssistantEntityState>>(json) ?? [];
+        var states = JsonSerializer.Deserialize<List<HomeAssistantEntityState>>(json) ?? [];
+        return states
+            .Where(s => !string.IsNullOrWhiteSpace(s.EntityId))
+            .GroupBy(s => s.EntityId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
     }
 
     /// <summary>

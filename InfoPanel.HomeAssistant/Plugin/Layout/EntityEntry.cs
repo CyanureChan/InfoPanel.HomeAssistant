@@ -52,34 +52,63 @@ internal sealed class EntityEntry
     }
 
     /// <summary>
+    /// Sets the entry value from discovery without skipping unchanged defaults.
+    /// </summary>
+    public void ApplyInitialState(HomeAssistantEntityState state)
+    {
+        if (Text != null)
+        {
+            Text.Value = state.State;
+            return;
+        }
+
+        if (Sensor != null && EntityStateMapper.TryParseNumeric(state.State, out float value))
+        {
+            Sensor.Value = value;
+        }
+    }
+
+    /// <summary>
     /// Updates the plugin entry from a fresh Home Assistant state.
     /// </summary>
     /// <param name="state">Current entity state.</param>
-    public void ApplyState(HomeAssistantEntityState state)
+    /// <returns>True when a displayed value changed.</returns>
+    public bool ApplyState(HomeAssistantEntityState state)
     {
         if (EntityStateMapper.IsUnavailable(state.State))
         {
-            if (Text != null)
+            if (Text != null && !string.Equals(Text.Value, state.State, StringComparison.Ordinal))
             {
                 Text.Value = state.State;
+                return true;
             }
 
-            return;
+            return false;
         }
 
         if (Sensor != null)
         {
-            if (EntityStateMapper.TryParseNumeric(state.State, out float value))
+            if (EntityStateMapper.IsUnavailable(state.State))
             {
-                Sensor.Value = value;
+                return false;
             }
 
-            return;
+            if (EntityStateMapper.TryParseNumeric(state.State, out float value) &&
+                Math.Abs(Sensor.Value - value) > 0.0001f)
+            {
+                Sensor.Value = value;
+                return true;
+            }
+
+            return false;
         }
 
-        if (Text != null)
+        if (Text != null && !string.Equals(Text.Value, state.State, StringComparison.Ordinal))
         {
             Text.Value = state.State;
+            return true;
         }
+
+        return false;
     }
 }

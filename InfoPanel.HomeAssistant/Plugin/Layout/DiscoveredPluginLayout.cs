@@ -3,6 +3,17 @@ namespace InfoPanel.HomeAssistant.Plugin.Layout;
 /// <summary>Full discovery result mapped to plugin containers and entries.</summary>
 internal sealed class DiscoveredPluginLayout
 {
+    private static readonly IReadOnlyDictionary<string, EntityEntry> EmptyLookup =
+        new Dictionary<string, EntityEntry>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Empty layout used before discovery or after close.</summary>
+    public static DiscoveredPluginLayout Empty { get; } = new()
+    {
+        Groups = [],
+        AllEntries = [],
+        EntryByEntityId = EmptyLookup,
+    };
+
     /// <summary>Discovered entity groups excluding the system container.</summary>
     public required IReadOnlyList<EntityGroupLayout> Groups { get; init; }
 
@@ -21,7 +32,9 @@ internal sealed class DiscoveredPluginLayout
     /// <summary>Supported entities in Home Assistant.</summary>
     public int SupportedEntityCount { get; init; }
 
-    /// <summary>All entity entries across every group.</summary>
-    public IReadOnlyList<EntityEntry> AllEntries =>
-        Groups.SelectMany(g => g.Entries).ToList();
+    /// <summary>Flat list of all entity entries, cached at discovery.</summary>
+    public required IReadOnlyList<EntityEntry> AllEntries { get; init; }
+
+    /// <summary>Entity id to entry map for O(dirty) state apply.</summary>
+    public required IReadOnlyDictionary<string, EntityEntry> EntryByEntityId { get; init; }
 }

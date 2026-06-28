@@ -1,4 +1,5 @@
 ﻿using InfoPanel.HomeAssistant.Core.Configuration;
+using InfoPanel.HomeAssistant.Core.Models;
 using InfoPanel.HomeAssistant.Core.Services;
 using InfoPanel.HomeAssistant.Plugin.Layout;
 using InfoPanel.Plugins;
@@ -12,8 +13,12 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     private readonly PluginText _connectionStatus =
         new("connection-status", "Connection Status", "Not configured");
 
-    private DiscoveredPluginLayout _layout = new() { Groups = [] };
+    private DiscoveredPluginLayout _layout = DiscoveredPluginLayout.Empty;
     private bool _discoverySettingsDirty;
+    private int _pollCycleCount;
+    private bool _loggedLegacyUpdateMode;
+    private bool _loggedLegacyCatalogRefresh;
+    private string _lastStableStatus = string.Empty;
 
     private string _baseUrl = string.Empty;
     private string _accessToken = string.Empty;
@@ -22,13 +27,12 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     private string _entityExclude = string.Empty;
     private int _maxEntities = HomeAssistantSettings.DefaultMaxEntities;
     private int _pollIntervalSeconds = HomeAssistantSettings.DefaultPollIntervalSeconds;
-    private string _updateMode = StateUpdateModeParser.WebSocket;
 
     public HomeAssistantPlugin()
         : base(
             "home-assistant-plugin",
             "Home Assistant",
-            "Home Assistant integration with entity discovery. Version: 0.6.0")
+            "Home Assistant integration with entity discovery. Version: 0.6.2")
     {
     }
 
@@ -55,22 +59,10 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
         },
         new PluginConfigProperty
         {
-            Key = "UpdateMode",
-            DisplayName = "Update Mode",
-            Description =
-                "WebSocket: live HA push (default). HttpPoll: full REST fetch each interval. " +
-                "Hybrid: WebSocket plus per-entity REST sync each interval.",
-            Type = PluginConfigType.Choice,
-            Value = _updateMode,
-            Options = StateUpdateModeParser.Options.ToArray()
-        },
-        new PluginConfigProperty
-        {
             Key = "PollIntervalSeconds",
-            DisplayName = "Poll Interval (seconds)",
+            DisplayName = "Refresh Interval (seconds)",
             Description =
-                "Seconds between plugin update cycles. WebSocket mode uses this for InfoPanel refresh only; " +
-                "HttpPoll mode controls REST fetch frequency.",
+                "How often dirty entity values push to InfoPanel. WebSocket keeps HA data live between refreshes.",
             Type = PluginConfigType.Integer,
             Value = _pollIntervalSeconds,
             MinValue = HomeAssistantSettings.MinPollIntervalSeconds,
@@ -113,77 +105,28 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             Key = "MaxEntities",
             DisplayName = "Max Entities",
             Description =
-                "Cap for domain/general pool only (default 50). Use 0 or * in Include/Domains for unlimited. " +
+                "Safeguard cap for domain/general pool only (default 2000). Use 0 or * in Include/Domains for unlimited. " +
                 "entity/device/integration rules are never capped.",
             Type = PluginConfigType.Integer,
             Value = _maxEntities,
             MinValue = 0,
-            MaxValue = 500,
+            MaxValue = HomeAssistantSettings.MaxMaxEntities,
             Step = 1
         }
     ];
 
     public void ApplyConfig(string key, object? value)
     {
-        switch (key)
+        if (!TryApplyConfigValue(key, value, markDiscoveryDirty: true))
         {
-            case "BaseUrl":
-                _baseUrl = value?.ToString() ?? string.Empty;
-                _discoverySettingsDirty = true;
-                break;
-            case "AccessToken":
-                _accessToken = value?.ToString() ?? string.Empty;
-                _discoverySettingsDirty = true;
-                break;
-            case "UpdateMode":
-                _updateMode = string.IsNullOrWhiteSpace(value?.ToString())
-                    ? StateUpdateModeParser.WebSocket
-                    : value!.ToString()!;
-                break;
-            case "PollIntervalSeconds":
-                if (value is int intValue)
-                {
-                    _pollIntervalSeconds = intValue;
-                }
-                else if (int.TryParse(value?.ToString(), out int parsed))
-                {
-                    _pollIntervalSeconds = parsed;
-                }
-                break;
-            case "EntityInclude":
-                _entityInclude = value?.ToString() ?? string.Empty;
-                _discoverySettingsDirty = true;
-                break;
-            case "EntityDomains":
-                _entityDomains = string.IsNullOrWhiteSpace(value?.ToString())
-                    ? HomeAssistantSettings.DefaultEntityDomains
-                    : value!.ToString()!;
-                _discoverySettingsDirty = true;
-                break;
-            case "EntityExclude":
-                _entityExclude = value?.ToString() ?? string.Empty;
-                _discoverySettingsDirty = true;
-                break;
-            case "MaxEntities":
-                if (value is int maxValue)
-                {
-                    _maxEntities = maxValue;
-                }
-                else if (int.TryParse(value?.ToString(), out int parsedMax))
-                {
-                    _maxEntities = parsedMax;
-                }
-                _discoverySettingsDirty = true;
-                break;
-            default:
-                return;
+            return;
         }
 
         HomeAssistantPluginEngine.ApplySettings(_runtime, BuildSettings());
 
         if (_discoverySettingsDirty && _runtime.IsConfigured)
         {
-            _connectionStatus.Value = "Config updated - click Reload to refresh entity list";
+            SetConnectionStatus("Config updated - click Reload to refresh entity list", force: true);
         }
     }
 
@@ -194,14 +137,16 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
 
     public override void Load(List<IPluginContainer> containers)
     {
-        HostConfigLoader.ApplyStoredConfig(Id, ApplyConfig);
+        HostConfigLoader.ApplyStoredConfig(Id, (key, value) => TryApplyConfigValue(key, value, markDiscoveryDirty: true));
         HomeAssistantPluginEngine.ApplySettings(_runtime, BuildSettings());
         _discoverySettingsDirty = false;
+        _pollCycleCount = 0;
+        _lastStableStatus = string.Empty;
 
         if (!_runtime.IsConfigured)
         {
-            _connectionStatus.Value = "Not configured";
-            _layout = new DiscoveredPluginLayout { Groups = [] };
+            SetConnectionStatus("Not configured", force: true);
+            _layout = DiscoveredPluginLayout.Empty;
         }
         else
         {
@@ -215,29 +160,43 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     {
         if (!_runtime.IsConfigured)
         {
-            _connectionStatus.Value = "Not configured";
+            SetConnectionStatus("Not configured", force: true);
             return;
         }
 
-        var entries = _layout.AllEntries;
-        if (entries.Count == 0)
+        if (_layout.AllEntries.Count == 0)
         {
-            _connectionStatus.Value = await DescribeEmptyDiscoveryAsync(cancellationToken);
+            SetConnectionStatus(await DescribeEmptyDiscoveryAsync(cancellationToken), force: true);
             return;
         }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        _pollCycleCount++;
+        bool forceFullSync = _pollCycleCount % HomeAssistantSettings.FullSyncPollInterval == 0;
 
         try
         {
-            var states = await _runtime.FetchFilteredStatesAsync(cancellationToken);
-            HomeAssistantPluginEngine.UpdateEntries(entries, states);
-            _connectionStatus.Value = BuildOkStatus(entries.Count);
+            StateUpdateBatch batch = await _runtime.PrepareUpdateBatchAsync(forceFullSync, cancellationToken);
+            int changed = 0;
+
+            if (batch.States.Count > 0)
+            {
+                changed = HomeAssistantPluginEngine.ApplyStates(_layout.EntryByEntityId, batch.States);
+                _runtime.ClearAppliedDirty(batch.States.Select(s => s.EntityId));
+            }
+
+            UpdateStableConnectionStatus();
+            HomeAssistantPluginTelemetry.RecordPoll(batch.Skipped && changed == 0, changed, stopwatch.ElapsedMilliseconds);
+            HomeAssistantPluginTelemetry.MaybeLogSummary();
+
             HomeAssistantPluginLog.Info(
-                $"Update: {_runtime.DescribeFetchPath()}, WS={_runtime.IsStateStreamConnected}, " +
-                $"states={states.Count}, status={_connectionStatus.Value}");
+                $"Update: {batch.FetchPath}, WS={_runtime.IsStateStreamConnected}, dirty={batch.DirtyCount}, " +
+                $"applied={batch.States.Count}, changed={changed}, poll_ms={stopwatch.ElapsedMilliseconds}, " +
+                $"skipped={batch.Skipped && batch.States.Count == 0}");
         }
         catch (Exception ex)
         {
-            _connectionStatus.Value = ex.Message;
+            SetConnectionStatus(ex.Message, force: true);
         }
     }
 
@@ -247,11 +206,98 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
     public override void Close()
     {
         _runtime.Dispose();
-        _layout = new DiscoveredPluginLayout { Groups = [] };
+        _layout = DiscoveredPluginLayout.Empty;
+    }
+
+    private bool TryApplyConfigValue(string key, object? value, bool markDiscoveryDirty)
+    {
+        switch (key)
+        {
+            case "BaseUrl":
+                _baseUrl = value?.ToString() ?? string.Empty;
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            case "AccessToken":
+                _accessToken = value?.ToString() ?? string.Empty;
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            case "UpdateMode":
+                if (!_loggedLegacyUpdateMode)
+                {
+                    _loggedLegacyUpdateMode = true;
+                    HomeAssistantPluginLog.Info(
+                        "UpdateMode config ignored (WebSocket with automatic REST fallback).");
+                }
+
+                return true;
+            case "CatalogRefreshSeconds":
+                if (!_loggedLegacyCatalogRefresh)
+                {
+                    _loggedLegacyCatalogRefresh = true;
+                    HomeAssistantPluginLog.Info(
+                        "CatalogRefreshSeconds removed in v0.6.1; use Refresh Interval only.");
+                }
+
+                return true;
+            case "PollIntervalSeconds":
+                _pollIntervalSeconds = PluginConfigCoercion.ToInt(
+                    value,
+                    HomeAssistantSettings.DefaultPollIntervalSeconds);
+                return true;
+            case "EntityInclude":
+                _entityInclude = value?.ToString() ?? string.Empty;
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            case "EntityDomains":
+                _entityDomains = string.IsNullOrWhiteSpace(value?.ToString())
+                    ? HomeAssistantSettings.DefaultEntityDomains
+                    : value!.ToString()!;
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            case "EntityExclude":
+                _entityExclude = value?.ToString() ?? string.Empty;
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            case "MaxEntities":
+                _maxEntities = PluginConfigCoercion.ToInt(value, HomeAssistantSettings.DefaultMaxEntities);
+                if (markDiscoveryDirty)
+                {
+                    _discoverySettingsDirty = true;
+                }
+
+                return true;
+            default:
+                return false;
+        }
     }
 
     private void TryDiscoverLayout()
     {
+        var settings = BuildSettings();
+        HomeAssistantPluginLog.Info(
+            $"Discovery using include='{settings.EntityInclude}', domains='{settings.EntityDomains}', " +
+            $"exclude='{settings.EntityExclude}', maxEntities={settings.MaxEntities}.");
+
         try
         {
             _layout = HomeAssistantPluginEngine
@@ -259,30 +305,37 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
                 .GetAwaiter()
                 .GetResult();
 
-            int count = _layout.AllEntries.Count;
-            if (count > 0)
+            if (_layout.AllEntries.Count > 0)
             {
-                _connectionStatus.Value = BuildOkStatus(count);
+                UpdateStableConnectionStatus(force: true);
             }
             else
             {
-                _connectionStatus.Value = "No entities matched filters";
+                SetConnectionStatus("No entities matched filters", force: true);
             }
 
             if (!string.IsNullOrWhiteSpace(_layout.RegistryWarning))
             {
-                _connectionStatus.Value = $"{_connectionStatus.Value} ({_layout.RegistryWarning})";
+                SetConnectionStatus($"{_connectionStatus.Value} ({_layout.RegistryWarning})", force: true);
             }
         }
         catch (Exception ex)
         {
-            _layout = new DiscoveredPluginLayout { Groups = [] };
-            _connectionStatus.Value = ex.Message;
+            _layout = DiscoveredPluginLayout.Empty;
+            HomeAssistantPluginLog.Error(ex, "Discovery failed during Load.");
+            SetConnectionStatus($"Discovery failed: {ex.Message} — click Reload", force: true);
         }
     }
 
-    private string BuildOkStatus(int entityCount)
+    private void UpdateStableConnectionStatus(bool force = false)
     {
+        string status = BuildStableStatus();
+        SetConnectionStatus(status, force);
+    }
+
+    private string BuildStableStatus()
+    {
+        int entityCount = _layout.AllEntries.Count;
         int groupCount = _layout.Groups.Count;
         var status = $"OK ({entityCount} entities: {_layout.ExplicitCount} explicit + {_layout.PoolCount} from domains";
 
@@ -296,14 +349,21 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
             status += $", {groupCount} devices";
         }
 
-        status += $", {StateUpdateModeParser.ToConfigValue(BuildSettings().UpdateMode)}, {_pollIntervalSeconds}s";
-
-        if (BuildSettings().UpdateMode != StateUpdateMode.HttpPoll)
-        {
-            status += _runtime.IsStateStreamConnected ? ", WS connected" : ", WS reconnecting";
-        }
+        status += $", {_runtime.SubscriptionMode}, {_pollIntervalSeconds}s refresh";
+        status += _runtime.IsStateStreamConnected ? ", WS connected" : ", WS reconnecting";
 
         return status + ")";
+    }
+
+    private void SetConnectionStatus(string value, bool force = false)
+    {
+        if (!force && string.Equals(_lastStableStatus, value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStableStatus = value;
+        _connectionStatus.Value = value;
     }
 
     private async Task<string> DescribeEmptyDiscoveryAsync(CancellationToken cancellationToken)
@@ -341,6 +401,5 @@ public sealed class HomeAssistantPlugin : BasePlugin, IPluginConfigurable
         EntityExclude = _entityExclude,
         MaxEntities = _maxEntities,
         PollIntervalSeconds = _pollIntervalSeconds,
-        UpdateMode = StateUpdateModeParser.Parse(_updateMode),
     };
 }
